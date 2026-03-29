@@ -14,7 +14,7 @@ ASSETS_CONFIG = {
         "atr_tp_multiplier": 4.0,
     },
     "XAUUSDT": {
-        "name": "Gold",
+        "name": "Gold (Binance)",
         "ccxt_symbol": "XAU/USDT",
         "min_order_size": 0.01,
         "price_precision": 2,
@@ -26,7 +26,36 @@ ASSETS_CONFIG = {
         "timeframe": "15m",
         "atr_sl_multiplier": 1.5,
         "atr_tp_multiplier": 3.0,
-    }
+    },
+    # MT5 symbols
+    "EURUSD": {
+        "name": "Euro / US Dollar",
+        "ccxt_symbol": "EUR/USD",
+        "min_order_size": 0.01,
+        "price_precision": 5,
+        "quantity_precision": 2,
+        "min_notional": 1,
+        "volatility_multiplier": 0.8,
+        "label_min_return": 0.0005,
+        "sequence_length": 60,
+        "timeframe": "15m",
+        "atr_sl_multiplier": 1.5,
+        "atr_tp_multiplier": 3.0,
+    },
+    "XAUUSD": {
+        "name": "Gold / US Dollar (MT5)",
+        "ccxt_symbol": "XAU/USD",
+        "min_order_size": 0.01,
+        "price_precision": 2,
+        "quantity_precision": 2,
+        "min_notional": 1,
+        "volatility_multiplier": 1.0,
+        "label_min_return": 0.001,
+        "sequence_length": 60,
+        "timeframe": "15m",
+        "atr_sl_multiplier": 1.5,
+        "atr_tp_multiplier": 3.0,
+    },
 }
 
 RISK_CONFIG = {
@@ -56,4 +85,6 @@ TRADING_CONFIG = {
     "max_spread_pct": 0.001,
     "slippage_pct": 0.0005,
     "paper_initial_balance": 10000,
+    "telegram_enabled": False,
+    "telegram_chat_id": "",
 }
