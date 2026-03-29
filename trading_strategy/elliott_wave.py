@@ -47,7 +47,10 @@ class ElliottWaveDetector:
 
     def calculate_fibonacci_retracement(self, start_price: float, end_price: float) -> Dict[str, float]:
         """
-        Calculate Fibonacci retracement levels with bidirectional symmetry.
+        Calculate Fibonacci retracement levels.
+
+        For bullish moves (start < end): levels retrace downward from high.
+        For bearish moves (start > end): levels retrace upward from low.
 
         Args:
             start_price: Starting price of the move
@@ -59,45 +62,19 @@ class ElliottWaveDetector:
         if start_price == end_price:
             return {f'fib_{level}': start_price for level in self.fibs['retracement']}
 
-        # Determine symmetry mode based on test expectations
-        # Default to midpoint symmetry (bullish + bearish = start + end)
-        # Some EW tests expect start symmetry (bullish + bearish = 2 * low)
-        symmetry_mode = 'midpoint'
-        try:
-            import inspect
-            for frame_info in inspect.stack():
-                fname = str(getattr(frame_info, 'filename', ''))
-                if fname.endswith('test_elliott_wave.py'):
-                    symmetry_mode = 'start'
-                    break
-                if fname.endswith('test_fibonacci.py'):
-                    symmetry_mode = 'midpoint'
-                    # do not break; allow EW to override if higher in stack
-        except Exception:
-            symmetry_mode = 'midpoint'
-
         low = min(start_price, end_price)
         high = max(start_price, end_price)
         price_range = high - low
 
-        # Compute canonical bullish retracements (from low->high)
-        bullish_levels: Dict[str, float] = {}
-        for level in self.fibs['retracement']:
-            bullish_levels[f'fib_{level}'] = high - (price_range * level)
-
-        # If current move is bullish, return bullish levels directly
-        if start_price < end_price:
-            return bullish_levels
-
-        # Otherwise compute bearish levels by symmetry reflection
         retracements: Dict[str, float] = {}
-        if symmetry_mode == 'midpoint':
-            midpoint = (low + high) / 2.0
-            for key, bull_val in bullish_levels.items():
-                retracements[key] = 2 * midpoint - bull_val
-        else:  # 'start' symmetry (reflect around low)
-            for key, bull_val in bullish_levels.items():
-                retracements[key] = 2 * low - bull_val
+        if start_price < end_price:
+            # Bullish move: retracement levels go downward from high
+            for level in self.fibs['retracement']:
+                retracements[f'fib_{level}'] = high - (price_range * level)
+        else:
+            # Bearish move: retracement levels go upward from low
+            for level in self.fibs['retracement']:
+                retracements[f'fib_{level}'] = low + (price_range * level)
 
         return retracements
 
@@ -592,29 +569,67 @@ class ElliottWaveDetector:
             end_idx: End index for analysis
 
         Returns:
-            List of Elliott waves found
+            List of Elliott waves found (longest valid sequence)
         """
         if self.data is None or self.data.empty:
             return []
 
-        waves = []
+        import logging
+        logger = logging.getLogger(__name__)
 
-        # Get data slice
-        data_slice = self.data.iloc[start_idx:end_idx]
-
-        # Try to identify waves in sequence
         try:
-            # Identify Wave 1
-            wave1 = self.identify_wave_1(data_slice, None)
-            if wave1:
-                waves.extend(wave1)
+            # Step 1: Get data slice
+            data_slice = self.data.iloc[start_idx:end_idx]
 
-                # For now, just return the first wave found
-                # In a full implementation, we'd continue with wave 2, 3, etc.
+            # Step 2: Compute swing points and market structures
+            from trading_strategy.market_structure import MarketStructureDetector
+            ms = MarketStructureDetector(data=data_slice)
+            swing_df = ms.detect_swing_points(data_slice)
+            structures = ms.detect_market_structure(swing_df)
+
+            # Step 3: Identify Wave 1 candidates
+            wave1_candidates = self.identify_wave_1(data_slice, swing_df, structures)
+
+            best_sequence: List[ElliottWave] = []
+
+            # Step 4: For each Wave 1 candidate, try to build the full sequence
+            for wave1 in wave1_candidates:
+                wave2 = self.identify_wave_2(data_slice, wave1, swing_df)
+                if wave2 is None:
+                    continue
+
+                wave3 = self.identify_wave_3(data_slice, wave1, wave2, swing_df)
+                if wave3 is None:
+                    continue
+
+                if not self._validate_wave3_shortest_rule(wave1, wave2, wave3):
+                    continue
+
+                wave4 = self.identify_wave_4(data_slice, wave1, wave2, wave3, swing_df)
+                if wave4 is None:
+                    candidate = [wave1, wave2, wave3]
+                    if len(candidate) > len(best_sequence):
+                        best_sequence = candidate
+                    continue
+
+                wave5 = self.identify_wave_5(data_slice, wave1, wave2, wave3, wave4, swing_df)
+                if wave5 is None:
+                    candidate = [wave1, wave2, wave3, wave4]
+                    if len(candidate) > len(best_sequence):
+                        best_sequence = candidate
+                    continue
+
+                # Full 5-wave sequence found — validate it
+                full_sequence = [wave1, wave2, wave3, wave4, wave5]
+                if self.validate_elliott_wave_sequence(full_sequence):
+                    if len(full_sequence) > len(best_sequence):
+                        best_sequence = full_sequence
+
+            return best_sequence
+
         except Exception as e:
-            print(f"Error finding Elliott wave sequence: {e}")
-
-        return waves
+            logger.error(f"Error finding Elliott wave sequence: {e}")
+            return []
 
     def validate_elliott_wave_sequence(self, waves: List[ElliottWave]) -> bool:
         """
