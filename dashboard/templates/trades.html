@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Ellite — Trade History</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"/>
+  <style>
+    body { background: #0d1117; color: #c9d1d9; }
+    .card { background: #161b22; border: 1px solid #30363d; }
+    .table { color: #c9d1d9; }
+    .table thead th { background: #161b22; color: #58a6ff; border-color: #30363d; font-size:.8rem; text-transform:uppercase; }
+    .table tbody tr { border-color: #30363d; }
+    .table tbody tr:hover { background: #1c2128; }
+    .positive { color: #3fb950; }
+    .negative { color: #f85149; }
+    .badge-buy  { background: #3fb95022; color: #3fb950; border:1px solid #3fb95055; }
+    .badge-sell { background: #f8514922; color: #f85149; border:1px solid #f8514955; }
+    .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: .5rem; }
+    .nav-link { color: #8b949e; }
+    .nav-link:hover, .nav-link.active { color: #c9d1d9; }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-dark px-4 py-2" style="background:#161b22; border-bottom:1px solid #30363d;">
+  <span class="navbar-brand fw-bold">⚡ Ellite Bot</span>
+  <div class="d-flex gap-3">
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link" href="/positions">Positions</a>
+    <a class="nav-link active" href="/trades">Trades</a>
+    <a class="nav-link" href="/models">Models</a>
+    <a class="nav-link" href="/assets">Assets</a>
+  </div>
+</nav>
+
+<div class="container-fluid py-4 px-4">
+  <h4 class="mb-4">Trade History</h4>
+
+  <!-- Summary stats -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+      <div class="stat-card p-3 text-center">
+        <div class="small text-muted mb-1">Total Trades</div>
+        <div class="fs-4 fw-bold">{{ trades|length }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="stat-card p-3 text-center">
+        <div class="small text-muted mb-1">Total PnL</div>
+        <div class="fs-4 fw-bold {% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">
+          {{ "%+.2f"|format(total_pnl) }} USDT
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="stat-card p-3 text-center">
+        <div class="small text-muted mb-1">Win Rate</div>
+        <div class="fs-4 fw-bold positive">{{ "%.1f"|format(win_rate * 100) }}%</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="stat-card p-3 text-center">
+        <div class="small text-muted mb-1">Profit Factor</div>
+        <div class="fs-4 fw-bold">
+          {% if profit_factor is not none %}{{ "%.2f"|format(profit_factor) }}{% else %}∞{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trades table -->
+  {% if trades %}
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-sm mb-0 align-middle">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Amount</th>
+            <th>PnL</th>
+            <th>PnL %</th>
+            <th>Reason</th>
+            <th>Model Signal</th>
+            <th>Confidence</th>
+            <th>Closed At</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in trades %}
+          <tr>
+            <td class="text-muted small">{{ loop.index }}</td>
+            <td><strong>{{ t.symbol }}</strong></td>
+            <td><span class="badge badge-{{ t.side|lower }}">{{ t.side|upper }}</span></td>
+            <td>{{ "%.4f"|format(t.entry_price) }}</td>
+            <td>{{ "%.4f"|format(t.exit_price) }}</td>
+            <td>{{ t.amount }}</td>
+            <td class="fw-bold {% if t.pnl >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "%+.2f"|format(t.pnl) }}
+            </td>
+            <td class="{% if t.pnl_pct >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "%+.2f"|format(t.pnl_pct * 100) }}%
+            </td>
+            <td><span class="badge bg-secondary">{{ t.reason or "—" }}</span></td>
+            <td><small>{{ t.model_signal or "—" }}</small></td>
+            <td>{{ "%.1f"|format(t.confidence * 100) }}%</td>
+            <td><small>{{ t.closed_at[:19] if t.closed_at else "—" }}</small></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card p-5 text-center text-muted">
+    <p class="mb-0 fs-5">No completed trades yet.</p>
+  </div>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
