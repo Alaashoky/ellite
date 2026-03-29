@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Ellite Trading Bot — Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"/>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+    body { background: #0d1117; color: #c9d1d9; }
+    .card { background: #161b22; border: 1px solid #30363d; }
+    .card-title { color: #58a6ff; font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; }
+    .stat-value { font-size: 1.8rem; font-weight: 700; }
+    .positive { color: #3fb950; }
+    .negative { color: #f85149; }
+    .badge-paper { background: #388bfd22; color: #58a6ff; border: 1px solid #388bfd55; }
+    .badge-live  { background: #3fb95022; color: #3fb950; border: 1px solid #3fb95055; }
+    #equity-chart { min-height: 360px; }
+    .nav-link { color: #8b949e; }
+    .nav-link:hover, .nav-link.active { color: #c9d1d9; }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-dark px-4 py-2" style="background:#161b22; border-bottom:1px solid #30363d;">
+  <span class="navbar-brand fw-bold">⚡ Ellite Bot</span>
+  <div class="d-flex gap-3">
+    <a class="nav-link active" href="/">Dashboard</a>
+    <a class="nav-link" href="/positions">Positions</a>
+    <a class="nav-link" href="/trades">Trades</a>
+    <a class="nav-link" href="/models">Models</a>
+    <a class="nav-link" href="/assets">Assets</a>
+  </div>
+</nav>
+
+<div class="container-fluid py-4 px-4">
+
+  <!-- Status banner -->
+  <div class="d-flex align-items-center gap-3 mb-4">
+    <h4 class="mb-0">Overview</h4>
+    {% if mode %}
+      <span class="badge badge-{{ mode|lower }} px-3 py-2">{{ mode }}</span>
+    {% endif %}
+    <span id="refresh-badge" class="badge bg-secondary ms-auto">Auto-refresh: 60s</span>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <!-- KPI cards -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+      <div class="card p-3 h-100">
+        <div class="card-title">Balance</div>
+        <div class="stat-value" id="kpi-balance">
+          {% if balance is defined %}{{ "%.2f"|format(balance) }} USDT{% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card p-3 h-100">
+        <div class="card-title">Total PnL</div>
+        <div class="stat-value {% if total_pnl is defined and total_pnl >= 0 %}positive{% else %}negative{% endif %}" id="kpi-pnl">
+          {% if total_pnl is defined %}{{ "%+.2f"|format(total_pnl) }} USDT{% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card p-3 h-100">
+        <div class="card-title">Win Rate</div>
+        <div class="stat-value positive" id="kpi-winrate">
+          {% if win_rate is defined %}{{ "%.1f"|format(win_rate * 100) }}%{% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card p-3 h-100">
+        <div class="card-title">Max Drawdown</div>
+        <div class="stat-value negative" id="kpi-drawdown">
+          {% if drawdown is defined %}{{ "%.2f"|format(drawdown * 100) }}%{% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Secondary stats -->
+  <div class="row g-3 mb-4">
+    <div class="col-4 col-lg-2">
+      <div class="card p-3 text-center">
+        <div class="card-title">Sharpe</div>
+        <div class="fw-bold fs-5">{{ "%.2f"|format(sharpe) if sharpe is defined else "—" }}</div>
+      </div>
+    </div>
+    <div class="col-4 col-lg-2">
+      <div class="card p-3 text-center">
+        <div class="card-title">Open Pos.</div>
+        <div class="fw-bold fs-5">{{ open_positions if open_positions is defined else "—" }}</div>
+      </div>
+    </div>
+    <div class="col-4 col-lg-2">
+      <div class="card p-3 text-center">
+        <div class="card-title">Total Trades</div>
+        <div class="fw-bold fs-5">{{ total_trades if total_trades is defined else "—" }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Equity Curve -->
+  <div class="card p-3">
+    <div class="card-title mb-2">Equity Curve</div>
+    <div id="equity-chart"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  let countdown = 60;
+
+  async function fetchStatus() {
+    try {
+      const r = await fetch('/api/status');
+      const d = await r.json();
+      if (d.equity_curve && d.equity_curve.length > 0) {
+        const x = d.equity_curve.map(p => p.t);
+        const y = d.equity_curve.map(p => p.v);
+        const layout = {
+          paper_bgcolor: 'rgba(0,0,0,0)',
+          plot_bgcolor:  'rgba(0,0,0,0)',
+          font:  { color: '#c9d1d9' },
+          xaxis: { gridcolor: '#30363d', zeroline: false },
+          yaxis: { gridcolor: '#30363d', zeroline: false, title: 'USDT' },
+          margin: { t: 10, l: 60, r: 20, b: 40 },
+        };
+        Plotly.react('equity-chart', [{
+          x, y, type: 'scatter', mode: 'lines',
+          line: { color: '#58a6ff', width: 2 },
+          fill: 'tozeroy', fillcolor: 'rgba(88,166,255,0.08)',
+          name: 'Balance'
+        }], layout, { responsive: true, displayModeBar: false });
+      }
+      document.getElementById('kpi-balance').textContent = (d.balance || 0).toFixed(2) + ' USDT';
+      const pnl = d.total_pnl || 0;
+      const pnlEl = document.getElementById('kpi-pnl');
+      pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ' USDT';
+      pnlEl.className = 'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
+      document.getElementById('kpi-winrate').textContent = ((d.win_rate || 0) * 100).toFixed(1) + '%';
+      document.getElementById('kpi-drawdown').textContent = ((d.drawdown || 0) * 100).toFixed(2) + '%';
+    } catch(e) { console.warn('Status fetch failed:', e); }
+  }
+
+  function tick() {
+    countdown--;
+    document.getElementById('refresh-badge').textContent = 'Auto-refresh: ' + countdown + 's';
+    if (countdown <= 0) { countdown = 60; fetchStatus(); }
+  }
+
+  fetchStatus();
+  setInterval(tick, 1000);
+</script>
+</body>
+</html>

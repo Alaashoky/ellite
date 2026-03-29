@@ -1,0 +1,59 @@
+ASSETS_CONFIG = {
+    "BTCUSDT": {
+        "name": "Bitcoin",
+        "ccxt_symbol": "BTC/USDT",
+        "min_order_size": 0.001,
+        "price_precision": 2,
+        "quantity_precision": 5,
+        "min_notional": 10,
+        "volatility_multiplier": 1.5,
+        "label_min_return": 0.003,
+        "sequence_length": 60,
+        "timeframe": "15m",
+        "atr_sl_multiplier": 2.0,
+        "atr_tp_multiplier": 4.0,
+    },
+    "XAUUSDT": {
+        "name": "Gold",
+        "ccxt_symbol": "XAU/USDT",
+        "min_order_size": 0.01,
+        "price_precision": 2,
+        "quantity_precision": 3,
+        "min_notional": 10,
+        "volatility_multiplier": 1.0,
+        "label_min_return": 0.001,
+        "sequence_length": 60,
+        "timeframe": "15m",
+        "atr_sl_multiplier": 1.5,
+        "atr_tp_multiplier": 3.0,
+    }
+}
+
+RISK_CONFIG = {
+    "risk_per_trade": 0.01,
+    "max_daily_risk": 0.05,
+    "max_drawdown": 0.15,
+    "max_concurrent_positions": 3,
+    "min_confidence": 0.65,
+    "stop_loss_atr_multiplier": 2.0,
+    "take_profit_rr_ratio": 2.0,
+}
+
+MODEL_CONFIG = {
+    "lstm_sequence_length": 60,
+    "lstm_epochs": 100,
+    "lstm_batch_size": 32,
+    "lstm_early_stopping_patience": 15,
+    "xgb_n_estimators": 500,
+    "rf_n_estimators": 300,
+    "ensemble_weights": {"lstm": 0.40, "xgboost": 0.35, "random_forest": 0.25},
+    "retrain_frequency_days": 30,
+    "min_confidence_threshold": 0.65,
+}
+
+TRADING_CONFIG = {
+    "loop_interval_minutes": 15,
+    "max_spread_pct": 0.001,
+    "slippage_pct": 0.0005,
+    "paper_initial_balance": 10000,
+}
