@@ -7,6 +7,14 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 import os
 
+try:
+    from trading_strategy.market_structure import MarketStructureDetector
+    from trading_strategy.elliott_wave import ElliottWaveDetector
+    from trading_strategy.ict_concepts import ICTConceptsDetector
+    _STRATEGY_AVAILABLE = True
+except Exception:
+    _STRATEGY_AVAILABLE = False
+
 
 class FeatureEngineer:
     """Generates technical and statistical features for ML models."""
@@ -19,8 +27,8 @@ class FeatureEngineer:
             symbol: Trading symbol, e.g. 'BTCUSDT' or 'XAUUSDT'
         """
         self.symbol = symbol
-        self.is_btc = symbol == 'BTCUSDT'
-        self.is_gold = symbol == 'XAUUSDT'
+        self.is_btc = 'BTC' in symbol.upper()
+        self.is_gold = 'XAU' in symbol.upper() or 'GOLD' in symbol.upper()
         self.label_min_return = 0.003 if self.is_btc else 0.001
         self.scaler = StandardScaler()
         self._feature_names: List[str] = []
@@ -37,6 +45,11 @@ class FeatureEngineer:
         df = self._add_volume_features(df)
         df = self._add_market_structure_features(df)
         df = self._add_session_features(df)
+        # NEW: Add strategy-based features
+        if _STRATEGY_AVAILABLE:
+            df = self._add_ict_features(df)
+            df = self._add_elliott_wave_features(df)
+            df = self._add_advanced_market_structure_features(df)
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.ffill(inplace=True)
         df.bfill(inplace=True)
@@ -289,6 +302,393 @@ class FeatureEngineer:
         df['is_ny'] = ((hour >= 13) & (hour < 21)).astype(int)     # UTC 13-21
         df['is_overlap'] = ((hour >= 13) & (hour < 16)).astype(int)  # London/NY overlap UTC
 
+        return df
+
+    def _add_ict_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add ICT (Inner Circle Trader) concept features:
+        - Order Blocks (bullish/bearish)
+        - Fair Value Gaps (bullish/bearish)
+        - Liquidity levels (above/below)
+        - Kill zones (Asia/London/NY sessions)
+        """
+        try:
+            detector = ICTConceptsDetector()
+
+            # --- Order Blocks ---
+            # Bullish OB: bearish candle before a strong bullish move
+            # Bearish OB: bullish candle before a strong bearish move
+            bullish_ob = pd.Series(0, index=df.index)
+            bearish_ob = pd.Series(0, index=df.index)
+            ob_strength = pd.Series(0.0, index=df.index)
+
+            close = df['close']
+            open_ = df['open']
+            high = df['high']
+            low = df['low']
+
+            for i in range(2, len(df) - 1):
+                # Bullish OB: bearish candle followed by strong bullish move
+                if (open_.iloc[i] > close.iloc[i] and  # bearish candle
+                    close.iloc[i+1] > high.iloc[i] and  # next breaks above
+                    (close.iloc[i+1] - open_.iloc[i+1]) > (high.iloc[i] - low.iloc[i]) * 0.5):  # strong move
+                    bullish_ob.iloc[i] = 1
+                    ob_strength.iloc[i] = min((close.iloc[i+1] - open_.iloc[i+1]) / (high.iloc[i] - low.iloc[i] + 1e-10), 3.0)
+
+                # Bearish OB: bullish candle followed by strong bearish move
+                if (close.iloc[i] > open_.iloc[i] and  # bullish candle
+                    close.iloc[i+1] < low.iloc[i] and  # next breaks below
+                    (open_.iloc[i+1] - close.iloc[i+1]) > (high.iloc[i] - low.iloc[i]) * 0.5):  # strong move
+                    bearish_ob.iloc[i] = 1
+                    ob_strength.iloc[i] = min((open_.iloc[i+1] - close.iloc[i+1]) / (high.iloc[i] - low.iloc[i] + 1e-10), 3.0)
+
+            df['ict_bullish_ob'] = bullish_ob
+            df['ict_bearish_ob'] = bearish_ob
+            df['ict_ob_strength'] = ob_strength
+
+            # Active OB zone (price is inside an OB zone - rolling window of last 20 candles)
+            df['ict_in_bullish_ob_zone'] = bullish_ob.rolling(20).max()
+            df['ict_in_bearish_ob_zone'] = bearish_ob.rolling(20).max()
+
+            # --- Fair Value Gaps (FVG) ---
+            # Bullish FVG: gap between candle[i-1].high and candle[i+1].low (3-candle pattern)
+            # Bearish FVG: gap between candle[i-1].low and candle[i+1].high
+            bullish_fvg = pd.Series(0, index=df.index)
+            bearish_fvg = pd.Series(0, index=df.index)
+            fvg_size = pd.Series(0.0, index=df.index)
+
+            for i in range(1, len(df) - 1):
+                # Bullish FVG
+                gap_bull = low.iloc[i+1] - high.iloc[i-1]
+                if gap_bull > 0:
+                    bullish_fvg.iloc[i] = 1
+                    fvg_size.iloc[i] = gap_bull / (close.iloc[i] + 1e-10)
+
+                # Bearish FVG
+                gap_bear = low.iloc[i-1] - high.iloc[i+1]
+                if gap_bear > 0:
+                    bearish_fvg.iloc[i] = 1
+                    fvg_size.iloc[i] = -gap_bear / (close.iloc[i] + 1e-10)
+
+            df['ict_bullish_fvg'] = bullish_fvg
+            df['ict_bearish_fvg'] = bearish_fvg
+            df['ict_fvg_size'] = fvg_size
+
+            # Unfilled FVG nearby (rolling 30 candles)
+            df['ict_unfilled_bullish_fvg'] = bullish_fvg.rolling(30).max()
+            df['ict_unfilled_bearish_fvg'] = bearish_fvg.rolling(30).max()
+
+            # --- Liquidity Levels ---
+            # Equal highs (buy-side liquidity) and equal lows (sell-side liquidity)
+            tolerance = close * 0.001  # 0.1% tolerance
+
+            equal_highs = pd.Series(0, index=df.index)
+            equal_lows = pd.Series(0, index=df.index)
+
+            for i in range(5, len(df)):
+                # Equal highs in last 20 candles (buy-side liquidity above)
+                recent_highs = high.iloc[max(0, i-20):i]
+                if (abs(high.iloc[i] - recent_highs.max()) < tolerance.iloc[i] and
+                        recent_highs.max() == recent_highs.iloc[-1]):
+                    equal_highs.iloc[i] = 1
+
+                # Equal lows in last 20 candles (sell-side liquidity below)
+                recent_lows = low.iloc[max(0, i-20):i]
+                if (abs(low.iloc[i] - recent_lows.min()) < tolerance.iloc[i] and
+                        recent_lows.min() == recent_lows.iloc[-1]):
+                    equal_lows.iloc[i] = 1
+
+            df['ict_equal_highs'] = equal_highs  # Buy-side liquidity above
+            df['ict_equal_lows'] = equal_lows    # Sell-side liquidity below
+
+            # Liquidity sweep detection
+            # Price sweeps equal highs then reverses
+            liquidity_sweep_high = pd.Series(0, index=df.index)
+            liquidity_sweep_low = pd.Series(0, index=df.index)
+
+            for i in range(3, len(df)):
+                if equal_highs.iloc[i-1] == 1 and close.iloc[i] < high.iloc[i-1]:
+                    liquidity_sweep_high.iloc[i] = 1  # Swept highs, bearish reversal
+                if equal_lows.iloc[i-1] == 1 and close.iloc[i] > low.iloc[i-1]:
+                    liquidity_sweep_low.iloc[i] = 1   # Swept lows, bullish reversal
+
+            df['ict_liquidity_sweep_high'] = liquidity_sweep_high
+            df['ict_liquidity_sweep_low'] = liquidity_sweep_low
+
+            # --- Premium/Discount zones ---
+            # Based on 50% level of recent swing range (last 50 candles)
+            swing_high_50 = high.rolling(50).max()
+            swing_low_50 = low.rolling(50).min()
+            swing_mid_50 = (swing_high_50 + swing_low_50) / 2
+            df['ict_in_premium'] = (close > swing_mid_50).astype(int)   # Above 50% = premium (sell zone)
+            df['ict_in_discount'] = (close < swing_mid_50).astype(int)  # Below 50% = discount (buy zone)
+            df['ict_pd_ratio'] = (close - swing_low_50) / (swing_high_50 - swing_low_50 + 1e-10)  # 0=low, 1=high
+
+        except Exception:
+            # If anything fails, add zeros
+            for col in ['ict_bullish_ob', 'ict_bearish_ob', 'ict_ob_strength',
+                        'ict_in_bullish_ob_zone', 'ict_in_bearish_ob_zone',
+                        'ict_bullish_fvg', 'ict_bearish_fvg', 'ict_fvg_size',
+                        'ict_unfilled_bullish_fvg', 'ict_unfilled_bearish_fvg',
+                        'ict_equal_highs', 'ict_equal_lows',
+                        'ict_liquidity_sweep_high', 'ict_liquidity_sweep_low',
+                        'ict_in_premium', 'ict_in_discount', 'ict_pd_ratio']:
+                df[col] = 0
+        return df
+
+    def _add_elliott_wave_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add Elliott Wave features:
+        - Current wave number (1-5, A-C)
+        - Wave direction (impulse vs corrective)
+        - Fibonacci levels proximity
+        - Wave completion probability
+        """
+        try:
+            # Use a rolling window to detect Elliott Wave patterns
+            close = df['close']
+            high = df['high']
+            low = df['low']
+
+            # Wave identification using swing points (simplified for ML features)
+            # Use multiple lookback periods to identify wave structure
+            wave_number = pd.Series(0, index=df.index)
+            wave_bullish = pd.Series(0, index=df.index)
+            wave_impulse = pd.Series(0, index=df.index)
+            fib_0382_proximity = pd.Series(0.0, index=df.index)
+            fib_0618_proximity = pd.Series(0.0, index=df.index)
+            fib_1618_proximity = pd.Series(0.0, index=df.index)
+            wave_momentum_div = pd.Series(0, index=df.index)
+
+            lookback = 50  # candles to analyze for wave structure
+
+            for i in range(lookback, len(df)):
+                segment = df.iloc[i-lookback:i+1]
+                seg_close = segment['close']
+                seg_high = segment['high']
+                seg_low = segment['low']
+
+                # Find significant swing points in segment
+                swings = []
+                for j in range(2, len(segment) - 2):
+                    h = seg_high.iloc[j]
+                    l = seg_low.iloc[j]
+                    # Swing high
+                    if h > seg_high.iloc[j-1] and h > seg_high.iloc[j-2] and h > seg_high.iloc[j+1] and h > seg_high.iloc[j+2]:
+                        swings.append(('H', h, j))
+                    # Swing low
+                    elif l < seg_low.iloc[j-1] and l < seg_low.iloc[j-2] and l < seg_low.iloc[j+1] and l < seg_low.iloc[j+2]:
+                        swings.append(('L', l, j))
+
+                if len(swings) < 3:
+                    continue
+
+                # Determine wave count from last 5 swings
+                recent_swings = swings[-5:] if len(swings) >= 5 else swings
+                current_price = seg_close.iloc[-1]
+                first_swing_price = recent_swings[0][1]
+                last_swing_price = recent_swings[-1][1]
+
+                # Determine overall direction
+                is_bullish = last_swing_price > first_swing_price
+                wave_bullish.iloc[i] = int(is_bullish)
+
+                # Count wave number based on number of alternating swings
+                n_swings = len(recent_swings)
+                if n_swings >= 5:
+                    # Check for 5-wave impulse pattern
+                    types = [s[0] for s in recent_swings[-5:]]
+                    if types in [['L','H','L','H','L'], ['H','L','H','L','H']]:
+                        wave_number.iloc[i] = 5
+                        wave_impulse.iloc[i] = 1
+                    elif n_swings >= 3:
+                        wave_number.iloc[i] = 3
+                        wave_impulse.iloc[i] = 0  # likely corrective ABC
+                elif n_swings == 3:
+                    wave_number.iloc[i] = 3
+                elif n_swings == 2:
+                    wave_number.iloc[i] = 2
+                elif n_swings == 1:
+                    wave_number.iloc[i] = 1
+
+                # Fibonacci proximity
+                if len(recent_swings) >= 2:
+                    swing_start = recent_swings[-2][1]
+                    swing_end = recent_swings[-1][1]
+                    price_range = abs(swing_end - swing_start)
+
+                    if price_range > 0:
+                        # Distance from key Fibonacci levels (normalized)
+                        fib_382 = swing_start + (swing_end - swing_start) * 0.382 if is_bullish else swing_start - (swing_start - swing_end) * 0.382
+                        fib_618 = swing_start + (swing_end - swing_start) * 0.618 if is_bullish else swing_start - (swing_start - swing_end) * 0.618
+                        fib_1618_ext = swing_end + price_range * 0.618
+
+                        fib_0382_proximity.iloc[i] = 1 - min(abs(current_price - fib_382) / price_range, 1.0)
+                        fib_0618_proximity.iloc[i] = 1 - min(abs(current_price - fib_618) / price_range, 1.0)
+                        fib_1618_proximity.iloc[i] = 1 - min(abs(current_price - fib_1618_ext) / price_range, 1.0)
+
+                # Momentum divergence (price makes new extreme but RSI doesn't)
+                if i >= 14:
+                    rsi_segment = close.iloc[i-14:i+1]
+                    delta = rsi_segment.diff()
+                    gain = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
+                    loss = -delta.clip(upper=0).ewm(com=13, adjust=False).mean()
+                    rs = gain / loss.replace(0, np.nan)
+                    rsi_vals = 100 - (100 / (1 + rs))
+                    if len(rsi_vals) >= 2:
+                        price_trend = close.iloc[i] - close.iloc[i-5]
+                        rsi_trend = rsi_vals.iloc[-1] - rsi_vals.iloc[-6] if len(rsi_vals) >= 6 else 0
+                        wave_momentum_div.iloc[i] = int((price_trend > 0 and rsi_trend < 0) or
+                                                        (price_trend < 0 and rsi_trend > 0))
+
+            df['ew_wave_number'] = wave_number
+            df['ew_wave_bullish'] = wave_bullish
+            df['ew_wave_impulse'] = wave_impulse
+            df['ew_fib_0382_proximity'] = fib_0382_proximity
+            df['ew_fib_0618_proximity'] = fib_0618_proximity
+            df['ew_fib_1618_proximity'] = fib_1618_proximity
+            df['ew_momentum_divergence'] = wave_momentum_div
+
+            # Wave 3 signal (strongest wave — best entry)
+            df['ew_is_wave3'] = (wave_number == 3).astype(int)
+            # Wave 5 with divergence (reversal signal)
+            df['ew_wave5_reversal'] = ((wave_number == 5) & (wave_momentum_div == 1)).astype(int)
+            # ABC correction end (potential reversal/continuation entry)
+            df['ew_abc_complete'] = ((wave_number == 3) & (wave_impulse == 0)).astype(int)
+
+        except Exception:
+            for col in ['ew_wave_number', 'ew_wave_bullish', 'ew_wave_impulse',
+                        'ew_fib_0382_proximity', 'ew_fib_0618_proximity', 'ew_fib_1618_proximity',
+                        'ew_momentum_divergence', 'ew_is_wave3', 'ew_wave5_reversal', 'ew_abc_complete']:
+                df[col] = 0
+        return df
+
+    def _add_advanced_market_structure_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add advanced market structure features using MarketStructureDetector:
+        - Break of Structure (BOS)
+        - Change of Character (CHoCH)
+        - Higher Highs / Lower Lows sequence
+        - Market bias (bullish/bearish/neutral)
+        - Swing point proximity
+        """
+        try:
+            close = df['close']
+            high = df['high']
+            low = df['low']
+
+            # Detect swing points (simple implementation for feature engineering)
+            strength = 3  # candles on each side
+
+            swing_high = pd.Series(False, index=df.index)
+            swing_low = pd.Series(False, index=df.index)
+            swing_high_price = pd.Series(np.nan, index=df.index)
+            swing_low_price = pd.Series(np.nan, index=df.index)
+
+            h_vals = high.values
+            l_vals = low.values
+
+            for i in range(strength, len(df) - strength):
+                is_sh = all(h_vals[i] > h_vals[i-j-1] and h_vals[i] > h_vals[i+j+1] for j in range(strength))
+                is_sl = all(l_vals[i] < l_vals[i-j-1] and l_vals[i] < l_vals[i+j+1] for j in range(strength))
+                if is_sh:
+                    swing_high.iloc[i] = True
+                    swing_high_price.iloc[i] = h_vals[i]
+                if is_sl:
+                    swing_low.iloc[i] = True
+                    swing_low_price.iloc[i] = l_vals[i]
+
+            # BOS detection: price breaks previous swing high/low
+            bos_bullish = pd.Series(0, index=df.index)  # Break above previous swing high
+            bos_bearish = pd.Series(0, index=df.index)  # Break below previous swing low
+            choch = pd.Series(0, index=df.index)         # Change of character
+
+            # Track last swing high and low
+            last_sh = np.nan
+            last_sl = np.nan
+            prev_last_sh = np.nan
+            prev_last_sl = np.nan
+            trend = 0  # 1=bullish, -1=bearish
+
+            for i in range(len(df)):
+                if swing_high.iloc[i]:
+                    prev_last_sh = last_sh
+                    last_sh = swing_high_price.iloc[i]
+
+                if swing_low.iloc[i]:
+                    prev_last_sl = last_sl
+                    last_sl = swing_low_price.iloc[i]
+
+                if not np.isnan(last_sh) and close.iloc[i] > last_sh:
+                    if trend == -1:
+                        choch.iloc[i] = 1   # CHoCH: was bearish, now bullish break
+                    else:
+                        bos_bullish.iloc[i] = 1  # BOS: continuation bullish
+                    trend = 1
+
+                if not np.isnan(last_sl) and close.iloc[i] < last_sl:
+                    if trend == 1:
+                        choch.iloc[i] = 1   # CHoCH: was bullish, now bearish break
+                    else:
+                        bos_bearish.iloc[i] = 1  # BOS: continuation bearish
+                    trend = -1
+
+            df['ms_bos_bullish'] = bos_bullish
+            df['ms_bos_bearish'] = bos_bearish
+            df['ms_choch'] = choch
+
+            # Higher High / Lower Low sequence (rolling 20 candles)
+            hh = pd.Series(0, index=df.index)
+            hl = pd.Series(0, index=df.index)
+            lh = pd.Series(0, index=df.index)
+            ll = pd.Series(0, index=df.index)
+
+            sh_prices = swing_high_price.dropna()
+            sl_prices = swing_low_price.dropna()
+
+            for i in range(1, len(sh_prices)):
+                idx = sh_prices.index[i]
+                if sh_prices.iloc[i] > sh_prices.iloc[i-1]:
+                    hh[idx] = 1
+                else:
+                    lh[idx] = 1
+
+            for i in range(1, len(sl_prices)):
+                idx = sl_prices.index[i]
+                if sl_prices.iloc[i] > sl_prices.iloc[i-1]:
+                    hl[idx] = 1
+                else:
+                    ll[idx] = 1
+
+            df['ms_higher_high'] = hh
+            df['ms_higher_low'] = hl
+            df['ms_lower_high'] = lh
+            df['ms_lower_low'] = ll
+
+            # Market bias score (rolling 10 structures)
+            bullish_score = (bos_bullish + choch * 0.5).rolling(10).sum()
+            bearish_score = (bos_bearish + choch * 0.5).rolling(10).sum()
+            df['ms_bias_score'] = (bullish_score - bearish_score) / (bullish_score + bearish_score + 1e-10)
+
+            # Proximity to nearest swing high/low (normalized by ATR)
+            nearest_sh = swing_high_price.ffill()
+            nearest_sl = swing_low_price.ffill()
+            atr = df.get('atr_14', (high - low).rolling(14).mean())
+
+            df['ms_dist_to_swing_high'] = (nearest_sh - close) / (atr + 1e-10)
+            df['ms_dist_to_swing_low'] = (close - nearest_sl) / (atr + 1e-10)
+
+            # Structure trend (rolling count of HH+HL vs LH+LL)
+            bull_struct = (hh + hl).rolling(20).sum()
+            bear_struct = (lh + ll).rolling(20).sum()
+            df['ms_structure_trend'] = (bull_struct - bear_struct) / (bull_struct + bear_struct + 1e-10)
+
+        except Exception:
+            for col in ['ms_bos_bullish', 'ms_bos_bearish', 'ms_choch',
+                        'ms_higher_high', 'ms_higher_low', 'ms_lower_high', 'ms_lower_low',
+                        'ms_bias_score', 'ms_dist_to_swing_high', 'ms_dist_to_swing_low',
+                        'ms_structure_trend']:
+                df[col] = 0
         return df
 
     # ------------------------------------------------------------------
