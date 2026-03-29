@@ -19,10 +19,16 @@ def _parse_args() -> argparse.Namespace:
         prog='ellite',
         description='Ellite AI Trading Bot — BTC/USDT & XAU/USDT',
     )
+    subparsers = parser.add_subparsers(dest='command')
+
+    # ------------------------------------------------------------------
+    # Legacy positional-mode interface (train / paper / live / backtest / dashboard)
+    # ------------------------------------------------------------------
     parser.add_argument(
         'mode',
+        nargs='?',
         choices=['train', 'paper', 'live', 'backtest', 'dashboard'],
-        help='Operating mode',
+        help='Operating mode (legacy positional argument)',
     )
     parser.add_argument(
         '--assets',
@@ -63,6 +69,90 @@ def _parse_args() -> argparse.Namespace:
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         help='Logging verbosity',
     )
+
+    # ------------------------------------------------------------------
+    # train-mt5 sub-command
+    # ------------------------------------------------------------------
+    p_train_mt5 = subparsers.add_parser(
+        'train-mt5',
+        help='Train AI models using MetaTrader 5 historical data.',
+    )
+    p_train_mt5.add_argument(
+        '--symbols',
+        default='EURUSD,XAUUSD',
+        help='Comma-separated MT5 symbol names (default: EURUSD,XAUUSD)',
+    )
+    p_train_mt5.add_argument(
+        '--start',
+        default='2020-01-01',
+        help='Training start date YYYY-MM-DD (default: 2020-01-01)',
+    )
+    p_train_mt5.add_argument(
+        '--end',
+        default='2023-12-31',
+        help='Training end date YYYY-MM-DD (default: 2023-12-31)',
+    )
+    p_train_mt5.add_argument(
+        '--timeframe',
+        default='15m',
+        help='Candlestick timeframe (default: 15m)',
+    )
+    p_train_mt5.add_argument(
+        '--model',
+        default=os.getenv('AI_MODEL', 'ensemble'),
+        choices=['ensemble', 'lstm', 'xgboost', 'random_forest'],
+        help='AI model to use (default: ensemble)',
+    )
+    p_train_mt5.add_argument(
+        '--balance',
+        type=float,
+        default=float(os.getenv('INITIAL_BALANCE', '10000')),
+        help='Initial balance for sizing context (default: 10000)',
+    )
+    p_train_mt5.add_argument(
+        '--log-level',
+        default='INFO',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        help='Logging verbosity',
+    )
+
+    # ------------------------------------------------------------------
+    # live-mt5 sub-command
+    # ------------------------------------------------------------------
+    p_live_mt5 = subparsers.add_parser(
+        'live-mt5',
+        help='Start the MT5-backed live/paper trading loop.',
+    )
+    p_live_mt5.add_argument(
+        '--symbols',
+        default='EURUSD,XAUUSD',
+        help='Comma-separated MT5 symbol names (default: EURUSD,XAUUSD)',
+    )
+    p_live_mt5.add_argument(
+        '--mode',
+        default='paper',
+        choices=['paper', 'live'],
+        help='Trading mode: paper (default) or live',
+    )
+    p_live_mt5.add_argument(
+        '--balance',
+        type=float,
+        default=float(os.getenv('INITIAL_BALANCE', '10000')),
+        help='Initial balance (default: 10000)',
+    )
+    p_live_mt5.add_argument(
+        '--model',
+        default=os.getenv('AI_MODEL', 'ensemble'),
+        choices=['ensemble', 'lstm', 'xgboost', 'random_forest'],
+        help='AI model to use (default: ensemble)',
+    )
+    p_live_mt5.add_argument(
+        '--log-level',
+        default='INFO',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        help='Logging verbosity',
+    )
+
     return parser.parse_args()
 
 
@@ -146,7 +236,49 @@ def _run_backtest(args) -> None:
         print(f"  Max Drawdown: {results.get('max_drawdown', 0):.2%}")
 
 
-def _run_dashboard(args) -> None:
+def _run_train_mt5(args) -> None:
+    """Train AI models using MetaTrader 5 historical data."""
+    from logger import setup_logger
+    setup_logger(log_level=args.log_level)
+    from ai_models.model_trainer import ModelTrainer
+    symbols = [s.strip() for s in args.symbols.split(',')]
+    for symbol in symbols:
+        print(f"\n{'='*60}")
+        print(f"Training models for {symbol} (MT5)")
+        print('='*60)
+        trainer = ModelTrainer(symbol)
+        metrics = trainer.train_all_models(
+            start_date=args.start,
+            end_date=args.end,
+            data_source='mt5',
+            mt5_symbol=symbol,
+        )
+        for model_name, m in metrics.items():
+            acc = m.get('accuracy', 'N/A')
+            print(f"  {model_name}: accuracy={acc}")
+    print("\nMT5 training complete.")
+
+
+def _run_live_mt5(args) -> None:
+    """Start the MT5-backed live/paper trading loop."""
+    from logger import setup_logger
+    setup_logger(log_level=args.log_level)
+    from mt5_live_trader import MT5LiveTrader
+    symbols = [s.strip() for s in args.symbols.split(',')]
+    trader = MT5LiveTrader(
+        assets=symbols,
+        model_type=args.model,
+        mode=args.mode,
+        initial_balance=args.balance,
+    )
+    try:
+        trader.run()
+    except KeyboardInterrupt:
+        trader.stop()
+        print("\nMT5 trading stopped.")
+
+
+
     from logger import setup_logger
     setup_logger(log_level=args.log_level)
     print(f"Starting dashboard on http://0.0.0.0:{args.port}")
@@ -161,6 +293,40 @@ def _run_dashboard(args) -> None:
 def main() -> None:
     _load_env()
     args = _parse_args()
+
+    # Handle new sub-commands first
+    if args.command == 'train-mt5':
+        try:
+            _run_train_mt5(args)
+        except KeyboardInterrupt:
+            print("\nInterrupted.")
+            sys.exit(0)
+        except Exception as e:
+            print(f"\nFatal error in 'train-mt5': {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        return
+
+    if args.command == 'live-mt5':
+        try:
+            _run_live_mt5(args)
+        except KeyboardInterrupt:
+            print("\nInterrupted.")
+            sys.exit(0)
+        except Exception as e:
+            print(f"\nFatal error in 'live-mt5': {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        return
+
+    # Legacy positional-mode interface
+    if not args.mode:
+        print("ERROR: Please specify a mode or sub-command.")
+        print("  Modes: train paper live backtest dashboard")
+        print("  Sub-commands: train-mt5 live-mt5")
+        sys.exit(1)
 
     dispatch = {
         'train':     _run_train,

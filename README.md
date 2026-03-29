@@ -117,3 +117,89 @@ The backtesting engine provides:
 - Sharpe ratio
 - Recovery factor
 - Trade statistics (count, duration, etc.)
+
+---
+
+## MT5 Setup (MetaTrader 5)
+
+The bot supports MetaTrader 5 as an alternative data source and execution engine,
+giving access to Forex, Gold (XAUUSD), and Crypto CFDs through any MT5 broker.
+
+> **⚠️ Windows only** — The MetaTrader5 Python API only runs on Windows.
+> On Linux/macOS a clear `ImportError` with a helpful message is raised.
+
+### 1. Install MetaTrader 5 Terminal
+
+Download and install the [MetaTrader 5 terminal](https://www.metatrader5.com/en/download)
+on Windows, then log in with your broker account.
+
+### 2. Configure credentials
+
+Either fill in `config/mt5_config.yaml`:
+
+```yaml
+mt5:
+  login: 123456              # your MT5 account number
+  password: "YourPassword"
+  server: "ICMarkets-Live01" # your broker's server name
+  path: ""                   # leave empty unless terminal is non-default location
+```
+
+Or set environment variables (these take priority over the config file):
+
+```bash
+MT5_LOGIN=123456
+MT5_PASSWORD=YourPassword
+MT5_SERVER=ICMarkets-Live01
+MT5_PATH=
+```
+
+### 3. Install Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Train AI models on MT5 historical data
+
+Fetch data from 2020-01-01 to 2023-12-31 and train all models:
+
+```bash
+python main.py train-mt5 --symbols EURUSD,XAUUSD --start 2020-01-01 --end 2023-12-31 --timeframe 15m
+```
+
+You can train on multiple symbols by passing a comma-separated list:
+
+```bash
+python main.py train-mt5 --symbols EURUSD,GBPUSD,XAUUSD,BTCUSD --start 2020-01-01 --end 2023-12-31
+```
+
+Trained models are saved to `saved_models/`.
+
+### 5. Run the MT5 trading bot
+
+**Paper mode** (no real orders, full simulation):
+
+```bash
+python main.py live-mt5 --symbols EURUSD,XAUUSD --mode paper
+```
+
+**Live mode** (real orders sent to MT5 terminal):
+
+```bash
+python main.py live-mt5 --symbols EURUSD,XAUUSD --mode live
+```
+
+### CLI reference
+
+| Sub-command | Key options | Description |
+|-------------|-------------|-------------|
+| `train-mt5` | `--symbols`, `--start`, `--end`, `--timeframe` | Train models from MT5 data |
+| `live-mt5`  | `--symbols`, `--mode paper\|live`, `--balance` | Start MT5 trading loop |
+
+### Notes
+
+- Data is fetched in **year-long chunks** (`copy_rates_range` batching) to reliably retrieve all history from 2020 regardless of broker candle limits.
+- All timestamps are normalised to **UTC**.
+- The existing Binance/ccxt workflow (`train`, `paper`, `live`, `backtest`) remains **100 % unchanged**.
+- MT5 symbol names differ by broker — use the exact name shown in your MT5 Market Watch (e.g. `EURUSD`, `XAUUSD`, `BTCUSD`).

@@ -1,0 +1,29 @@
+# config/mt5_config.yaml
+# MetaTrader 5 connection and trading configuration.
+#
+# You can override any value here with environment variables:
+#   MT5_LOGIN      — account number (integer)
+#   MT5_PASSWORD   — account password
+#   MT5_SERVER     — broker server name (e.g. "ICMarkets-Live01")
+#   MT5_PATH       — optional full path to terminal64.exe
+
+mt5:
+  login: 0                      # MT5 account number (integer)
+  password: ""                  # MT5 password
+  server: "MetaQuotes-Demo"     # MT5 broker server name
+  path: ""                      # Optional: full path to terminal64.exe
+
+training:
+  start_date: "2020-01-01"
+  end_date:   "2023-12-31"
+  timeframe:  "15m"
+
+backtest:
+  start_date: "2024-01-01"
+  end_date:   "2025-12-31"
+
+symbols:
+  - "EURUSD"
+  - "GBPUSD"
+  - "XAUUSD"
+  - "BTCUSD"
