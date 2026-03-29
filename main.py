@@ -278,7 +278,8 @@ def _run_live_mt5(args) -> None:
         print("\nMT5 trading stopped.")
 
 
-
+def _run_dashboard(args) -> None:
+    """Start the web dashboard."""
     from logger import setup_logger
     setup_logger(log_level=args.log_level)
     print(f"Starting dashboard on http://0.0.0.0:{args.port}")
