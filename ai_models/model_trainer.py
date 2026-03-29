@@ -52,18 +52,36 @@ class ModelTrainer:
         start_date: str,
         end_date: str,
         timeframe: str = '15m',
+        data_source: str = 'ccxt',
+        mt5_symbol: Optional[str] = None,
     ) -> pd.DataFrame:
         """
-        Fetch OHLCV data via ccxt Binance with pagination.
+        Fetch OHLCV data.
 
         Args:
-            start_date: ISO date string, e.g. '2020-01-01'
-            end_date:   ISO date string, e.g. '2024-01-01'
-            timeframe:  ccxt timeframe string, default '15m'
+            start_date:  ISO date string, e.g. '2020-01-01'
+            end_date:    ISO date string, e.g. '2024-01-01'
+            timeframe:   Timeframe string, default '15m'
+            data_source: 'ccxt' (default, Binance) or 'mt5' (MetaTrader 5).
+            mt5_symbol:  MT5 instrument name (e.g. 'EURUSD').
+                         Only used when data_source='mt5'.
+                         Defaults to self.symbol when omitted.
 
         Returns:
-            DataFrame with columns: timestamp, open, high, low, close, volume
+            DataFrame indexed by 'timestamp' (UTC) with columns:
+            open, high, low, close, volume.
         """
+        if data_source == 'mt5':
+            return self._fetch_via_mt5(start_date, end_date, timeframe, mt5_symbol)
+        return self._fetch_via_ccxt(start_date, end_date, timeframe)
+
+    def _fetch_via_ccxt(
+        self,
+        start_date: str,
+        end_date: str,
+        timeframe: str,
+    ) -> pd.DataFrame:
+        """Fetch OHLCV data via ccxt Binance with pagination."""
         try:
             import ccxt
         except ImportError as e:
@@ -118,6 +136,72 @@ class ModelTrainer:
         df = df[df.index < pd.Timestamp(end_date, tz='UTC')]
         return df
 
+    def _fetch_via_mt5(
+        self,
+        start_date: str,
+        end_date: str,
+        timeframe: str,
+        mt5_symbol: Optional[str],
+    ) -> pd.DataFrame:
+        """Fetch OHLCV data via MetaTrader 5."""
+        import os
+
+        symbol = mt5_symbol or self.symbol
+
+        # Load credentials: env vars take priority, then config file
+        login = os.getenv('MT5_LOGIN')
+        password = os.getenv('MT5_PASSWORD')
+        server = os.getenv('MT5_SERVER')
+        path = os.getenv('MT5_PATH', '')
+
+        if not (login and password and server):
+            try:
+                import yaml  # type: ignore
+                config_path = os.path.join(
+                    os.path.dirname(__file__), '..', 'config', 'mt5_config.yaml'
+                )
+                with open(config_path, 'r') as fh:
+                    cfg = yaml.safe_load(fh)
+                mt5_cfg = cfg.get('mt5', {})
+                login = login or str(mt5_cfg.get('login', '0'))
+                password = password or str(mt5_cfg.get('password', ''))
+                server = server or str(mt5_cfg.get('server', 'MetaQuotes-Demo'))
+                path = path or str(mt5_cfg.get('path', ''))
+            except Exception as exc:
+                logger.warning(f"Could not load mt5_config.yaml: {exc}")
+
+        if not login or not password or not server:
+            raise RuntimeError(
+                "MT5 credentials not configured. "
+                "Set MT5_LOGIN, MT5_PASSWORD, MT5_SERVER environment variables "
+                "or fill in config/mt5_config.yaml."
+            )
+
+        from mt5_connector import MT5Connector
+        from trading_strategy.mt5_data_loader import MT5DataLoader
+
+        connector = MT5Connector(
+            login=int(login),
+            password=password,
+            server=server,
+            path=path,
+        )
+        if not connector.connect():
+            raise RuntimeError("Failed to connect to MetaTrader 5 terminal.")
+
+        try:
+            loader = MT5DataLoader(connector)
+            df = loader.load_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        finally:
+            connector.disconnect()
+
+        return df
+
     # ------------------------------------------------------------------
     # Dataset preparation
     # ------------------------------------------------------------------
@@ -169,10 +253,16 @@ class ModelTrainer:
         df: Optional[pd.DataFrame] = None,
         start_date: str = '2020-01-01',
         end_date: str = '2024-01-01',
+        data_source: str = 'ccxt',
+        mt5_symbol: Optional[str] = None,
     ) -> Dict:
         """Fetch data (if not provided), prepare dataset, train all three models."""
         if df is None:
-            df = self.fetch_historical_data(start_date, end_date)
+            df = self.fetch_historical_data(
+                start_date, end_date,
+                data_source=data_source,
+                mt5_symbol=mt5_symbol,
+            )
 
         dataset = self.prepare_dataset(df)
         metrics = {}
