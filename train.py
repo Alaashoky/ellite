@@ -13,7 +13,10 @@ This script ties together the full AI training pipeline with strategy signals:
 Usage examples:
     python train.py --symbol BTCUSDT --start-date 2021-01-01 --end-date 2024-01-01 --strategy-analysis
     python train.py --symbol XAUUSDT --data-source mt5 --mt5-symbol XAUUSD --walk-forward --n-splits 5
-    python train.py --symbol BTCUSDT --strategy-analysis --walk-forward --backtest
+    # Train on 2020-2024, backtest automatically on 2024→today (out-of-sample):
+    python train.py --symbol BTCUSDT --start-date 2020-01-01 --end-date 2024-01-01 --backtest
+    # Or specify a custom backtest end date:
+    python train.py --symbol BTCUSDT --start-date 2020-01-01 --end-date 2024-01-01 --backtest --backtest-end-date 2025-06-01
 """
 
 import argparse
@@ -124,6 +127,15 @@ def _parse_args() -> argparse.Namespace:
         "--backtest",
         action="store_true",
         help="Run a quick backtest after training using the backtester.",
+    )
+    parser.add_argument(
+        "--backtest-end-date",
+        default=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        help=(
+            "End date for the out-of-sample backtest (YYYY-MM-DD). "
+            "Defaults to today's date. The backtest start date is "
+            "always set to --end-date so there is no overlap with training data."
+        ),
     )
 
     return parser.parse_args()
@@ -245,17 +257,34 @@ def _build_strategy_features(df, symbol: str):
 # Backtest helper
 # ---------------------------------------------------------------------------
 
-def _run_quick_backtest(symbol: str, start_date: str, end_date: str):
-    """Run a quick backtest using UnifiedBacktester and print the result."""
+def _run_quick_backtest(symbol: str, backtest_start_date: str, backtest_end_date: str):
+    """Run an out-of-sample quick backtest using UnifiedBacktester and print the result.
+
+    The backtest intentionally uses a date range that does **not** overlap with
+    the training period.  ``backtest_start_date`` should equal the training
+    ``end_date`` so the model is evaluated on data it has never seen.
+
+    Args:
+        symbol: Trading pair symbol.
+        backtest_start_date: Start of the backtest window (= end of training).
+        backtest_end_date: End of the backtest window (defaults to today).
+    """
     try:
         from backtest import UnifiedBacktester
     except ImportError as exc:
         logger.warning("backtest module unavailable — skipping backtest. (%s)", exc)
         return
 
+    logger.info(
+        "Backtest  range : %s → %s  (out-of-sample)",
+        backtest_start_date,
+        backtest_end_date,
+    )
     logger.info("=== Quick Backtest ===")
     bt = UnifiedBacktester(base_path=".")
-    result = bt.quick_validation(pair=symbol, start_date=start_date, end_date=end_date)
+    result = bt.quick_validation(
+        pair=symbol, start_date=backtest_start_date, end_date=backtest_end_date
+    )
 
     if result:
         print("\n=== Quick Backtest Results ===")
@@ -360,10 +389,15 @@ def main():
             _run_strategy_analysis(df_enriched, args.symbol)
 
         # ------------------------------------------------------------------
-        # 6. Quick backtest
+        # 6. Quick backtest (out-of-sample: end_date → backtest_end_date)
         # ------------------------------------------------------------------
         if args.backtest:
-            _run_quick_backtest(args.symbol, args.start_date, args.end_date)
+            logger.info(
+                "Training  range : %s → %s",
+                args.start_date,
+                args.end_date,
+            )
+            _run_quick_backtest(args.symbol, args.end_date, args.backtest_end_date)
 
         logger.info("Training pipeline completed successfully.")
 
