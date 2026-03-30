@@ -49,13 +49,14 @@ class TestExchangeConnectorPaper:
     def test_paper_sell_order(self, paper_exchange, monkeypatch):
         """Sell order should deduct BTC and credit USDT."""
         monkeypatch.setattr(paper_exchange, 'get_ticker', lambda sym: {'last': 50_000.0})
-        paper_exchange.place_order('BTCUSDT', 'buy', 0.2)
+        # Use 0.19 BTC so buy cost (0.19 * 50000 * 1.0005 ≈ 9504.75) stays within 10k balance.
+        paper_exchange.place_order('BTCUSDT', 'buy', 0.19)
         bal_before = paper_exchange.get_balance()['free']['USDT']
 
-        paper_exchange.place_order('BTCUSDT', 'sell', 0.1)
+        paper_exchange.place_order('BTCUSDT', 'sell', 0.09)
         bal_after = paper_exchange.get_balance()['free']['USDT']
         assert bal_after > bal_before
-        assert paper_exchange.get_balance()['free']['BTC'] == pytest.approx(0.1, abs=1e-8)
+        assert paper_exchange.get_balance()['free']['BTC'] == pytest.approx(0.10, abs=1e-8)
 
     def test_slippage_applied_on_buy(self, paper_exchange, monkeypatch):
         """Fill price should be slightly above market price for buys."""
