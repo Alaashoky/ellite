@@ -40,6 +40,7 @@ class ExchangeConnector:
                 'USDT': initial_balance, 'BTC': 0.0, 'XAU': 0.0
             }
             self._paper_orders: List[Dict] = []
+            self._paper_public_exchange = None  # lazily cached public client
         else:
             self._init_live_exchange()
 
@@ -58,6 +59,13 @@ class ExchangeConnector:
             })
         except ImportError as e:
             raise ImportError("ccxt is required for live trading.") from e
+
+    def _get_paper_public_exchange(self):
+        """Return a cached public ccxt.binance instance for paper-mode data fetches."""
+        if self._paper_public_exchange is None:
+            import ccxt
+            self._paper_public_exchange = ccxt.binance({'enableRateLimit': True})
+        return self._paper_public_exchange
 
     # ------------------------------------------------------------------
     # Market data
@@ -78,10 +86,9 @@ class ExchangeConnector:
         ccxt_symbol = self.SUPPORTED_SYMBOLS.get(symbol, symbol.replace('USDT', '/USDT'))
 
         if self.paper_mode:
-            # Still call exchange (no auth needed for public endpoints)
+            # Reuse cached public exchange instance (no auth needed for public endpoints).
             try:
-                import ccxt
-                ex = ccxt.binance({'enableRateLimit': True})
+                ex = self._get_paper_public_exchange()
                 raw = self._retry_with_backoff(
                     ex.fetch_ohlcv, ccxt_symbol, timeframe, limit=limit
                 )
@@ -103,8 +110,7 @@ class ExchangeConnector:
         ccxt_symbol = self.SUPPORTED_SYMBOLS.get(symbol, symbol)
         if self.paper_mode:
             try:
-                import ccxt
-                ex = ccxt.binance({'enableRateLimit': True})
+                ex = self._get_paper_public_exchange()
                 return self._retry_with_backoff(ex.fetch_ticker, ccxt_symbol)
             except Exception as e:
                 logger.warning(f"get_ticker failed: {e}")
@@ -126,8 +132,15 @@ class ExchangeConnector:
         """
         Place an order.
 
+        Performs defensive validation (finite/positive amount and price) before
+        forwarding to paper simulation or the live exchange.
         Paper mode: fills immediately with simulated slippage.
         """
+        import math
+        if not math.isfinite(amount) or amount <= 0:
+            raise ValueError(f"Invalid order amount: {amount}")
+        if price is not None and (not math.isfinite(price) or price <= 0):
+            raise ValueError(f"Invalid order price: {price}")
         if self.paper_mode:
             return self._paper_place_order(symbol, side, amount, price, order_type)
         ccxt_symbol = self.SUPPORTED_SYMBOLS.get(symbol, symbol)
