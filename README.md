@@ -120,6 +120,80 @@ The backtesting engine provides:
 
 ---
 
+## Separated Train / Backtest Workflows
+
+To keep model training and out-of-sample evaluation cleanly separated, two
+dedicated scripts are provided:
+
+| Script | Purpose | Default window |
+|--------|---------|----------------|
+| `train_model.py` | Train AI models on **in-sample** historical data | 2020-01-01 → 2023-12-31 |
+| `backtest_oos.py` | Evaluate trained models on **out-of-sample** data | 2024-01-01 → today |
+
+### Training (`train_model.py`)
+
+```bash
+# Train with defaults (2020-01-01 → 2023-12-31, BTCUSDT, 15m):
+python train_model.py
+
+# Train a different symbol on a custom date range:
+python train_model.py --symbol XAUUSDT --start-date 2019-01-01 --end-date 2023-12-31
+
+# Train using MT5 as data source:
+python train_model.py --symbol XAUUSDT --data-source mt5 --mt5-symbol XAUUSD.m
+
+# Train with walk-forward validation (5 folds):
+python train_model.py --symbol BTCUSDT --walk-forward --n-splits 5
+```
+
+Trained model artifacts are saved to `saved_models/` (override with `--models-dir`).
+A log file is written to `logs/train_model_<SYMBOL>_<TIMESTAMP>.log` (override with `--logs-dir`).
+
+### Backtesting (`backtest_oos.py`)
+
+```bash
+# Run backtest with defaults (2024-01-01 → today, BTCUSDT, single mode):
+python backtest_oos.py
+
+# Backtest a specific symbol on a custom out-of-sample period:
+python backtest_oos.py --symbol XAUUSD --start-date 2024-01-01 --end-date 2025-01-01
+
+# Quick validation with a larger initial balance:
+python backtest_oos.py --mode quick --initial-balance 50000
+
+# Walk-forward analysis:
+python backtest_oos.py --symbol BTCUSDT --mode walkforward
+
+# Custom report output directory:
+python backtest_oos.py --report-dir ./my_reports
+```
+
+JSON reports are saved to `backtest_reports/` (override with `--report-dir`).
+Each report is timestamped: `backtest_oos_<SYMBOL>_<MODE>_<TIMESTAMP>.json`.
+Log files are written to `logs/backtest_oos_<SYMBOL>_<TIMESTAMP>.log`.
+
+### CLI quick-reference
+
+| Argument | `train_model.py` | `backtest_oos.py` |
+|---|---|---|
+| `--symbol` | ✔ (BTCUSDT / XAUUSDT) | ✔ (any symbol) |
+| `--mt5-symbol` | ✔ | ✔ |
+| `--start-date` | default `2020-01-01` | default `2024-01-01` |
+| `--end-date` | default `2023-12-31` | default today |
+| `--timeframe` | ✔ | — |
+| `--data-source` | ccxt / mt5 | — |
+| `--models-dir` | ✔ | ✔ |
+| `--logs-dir` | ✔ | ✔ |
+| `--walk-forward` / `--n-splits` | ✔ | — |
+| `--initial-balance` | — | ✔ |
+| `--mode` | — | quick / single / multi / walkforward |
+| `--report-dir` | — | ✔ |
+
+> **CLI overrides config**: date ranges passed on the command line always take
+> precedence over any defaults in `config/` files.
+
+---
+
 ## MT5 Setup (MetaTrader 5)
 
 The bot supports MetaTrader 5 as an alternative data source and execution engine,
